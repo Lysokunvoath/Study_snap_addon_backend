@@ -28,7 +28,7 @@ export class ParakeetProvider implements TranscriptionProvider {
   }
 
   public async startStream(config: StreamConfig): Promise<void> {
-    if (!fs.existsSync(env.parakeetModelPath)) {
+    if (!env.parakeetMockMode && !fs.existsSync(env.parakeetModelPath)) {
       throw new Error(`Parakeet model not found at ${env.parakeetModelPath}`);
     }
 
