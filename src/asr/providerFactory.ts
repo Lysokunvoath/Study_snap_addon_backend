@@ -1,8 +1,14 @@
-import { ParakeetProvider } from './parakeetProvider';
+import { env } from '../config/env';
+import { MockProvider } from './mockProvider';
+import { GoogleCloudSpeechProvider } from './googleCloudSpeechProvider';
 import { ProviderCallbacks, TranscriptionProvider } from './types';
 
 export function createTranscriptionProvider(
   callbacks: ProviderCallbacks
 ): TranscriptionProvider {
-  return new ParakeetProvider(callbacks);
+  if (env.asrProvider === 'google-cloud') {
+    return new GoogleCloudSpeechProvider(callbacks);
+  }
+
+  return new MockProvider(callbacks);
 }

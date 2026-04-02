@@ -39,6 +39,7 @@ function getJwtSecret(): string {
 
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
+  asrProvider: (process.env.ASR_PROVIDER ?? 'mock').toLowerCase(),
   port: getNumberEnv('PORT', 8080),
   corsOrigin: process.env.CORS_ORIGIN ?? '*',
   jwtSecret: getJwtSecret(),
@@ -46,16 +47,7 @@ export const env = {
   sessionMaxRequestsPerMinute: getNumberEnv('SESSION_MAX_REQUESTS_PER_MINUTE', 30),
   wsMaxPayloadBytes: getNumberEnv('WS_MAX_PAYLOAD_BYTES', 512 * 1024),
   wsMaxMessagesPer10s: getNumberEnv('WS_MAX_MESSAGES_PER_10S', 60),
-  parakeetModelPath: path.resolve(process.cwd(), process.env.PARAKEET_MODEL_PATH ?? '../parakeet-tdt-0.6b-v2.nemo'),
-  parakeetLanguage: process.env.PARAKEET_LANGUAGE ?? 'en-US',
-  parakeetSampleRate: getNumberEnv('PARAKEET_SAMPLE_RATE', 16000),
-  parakeetMockMode: (process.env.PARAKEET_MOCK_MODE ?? 'true').toLowerCase() === 'true',
-  parakeetPythonCommand: process.env.PARAKEET_PYTHON_COMMAND ?? 'python',
-  parakeetInferScriptPath: path.resolve(
-    process.cwd(),
-    process.env.PARAKEET_INFER_SCRIPT_PATH ?? './scripts/parakeet_transcribe.py'
-  ),
-  parakeetInferIntervalMs: getNumberEnv('PARAKEET_INFER_INTERVAL_MS', 5000),
-  parakeetInferenceTimeoutMs: getNumberEnv('PARAKEET_INFERENCE_TIMEOUT_MS', 120000),
-  parakeetMaxBufferedSeconds: getNumberEnv('PARAKEET_MAX_BUFFERED_SECONDS', 120),
+  googleProjectId: process.env.GOOGLE_CLOUD_PROJECT_ID ?? '',
+  googleCredentialsJson: process.env.GOOGLE_CLOUD_CREDENTIALS_JSON ?? '',
+  googleSpeechModel: process.env.GOOGLE_SPEECH_MODEL ?? 'latest_long',
 };

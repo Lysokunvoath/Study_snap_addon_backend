@@ -58,8 +58,8 @@ async function createSessionToken(baseUrl: string, origin: string): Promise<Sess
 async function run(): Promise<void> {
   const baseUrl = process.env.BACKEND_BASE_URL ?? 'http://localhost:8080';
   const testOrigin = process.env.TEST_ORIGIN ?? process.env.CORS_ORIGIN ?? 'http://localhost:3000';
-  const sampleRate = Number(process.env.PARAKEET_SAMPLE_RATE ?? '16000');
-  const language = process.env.PARAKEET_LANGUAGE ?? 'en-US';
+  const sampleRate = Number(process.env.SAMPLE_RATE ?? '16000');
+  const language = process.env.LANGUAGE ?? 'en-US';
   const chunkDurationMs = Number(process.env.SMOKE_CHUNK_DURATION_MS ?? '250');
   const chunkCount = Number(process.env.SMOKE_CHUNK_COUNT ?? '20');
 

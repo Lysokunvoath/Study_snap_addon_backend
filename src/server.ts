@@ -8,7 +8,6 @@ server.listen(env.port, () => {
   logger.info('Backend server listening', {
     port: env.port,
     nodeEnv: env.nodeEnv,
-    modelPath: env.parakeetModelPath,
-    mockMode: env.parakeetMockMode,
+    asrProvider: 'google-cloud',
   });
 });

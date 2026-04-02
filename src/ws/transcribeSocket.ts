@@ -151,14 +151,14 @@ export function handleTranscribeConnection(ws: WebSocket, req: IncomingMessage):
         });
 
         await provider.startStream({
-          language: clientMessage.payload.language ?? env.parakeetLanguage,
-          sampleRate: clientMessage.payload.sampleRate ?? env.parakeetSampleRate,
+          language: clientMessage.payload.language ?? 'en-US',
+          sampleRate: clientMessage.payload.sampleRate ?? 16000,
         });
 
         sendJson(ws, {
           type: 'session.started',
           payload: {
-            language: clientMessage.payload.language ?? env.parakeetLanguage,
+            language: clientMessage.payload.language ?? 'en-US',
           },
         });
         return;

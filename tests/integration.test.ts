@@ -11,8 +11,7 @@ before(async () => {
   process.env.NODE_ENV = 'test';
   process.env.JWT_SECRET = 'test-secret';
   process.env.CORS_ORIGIN = '*';
-  process.env.PARAKEET_MOCK_MODE = 'true';
-  process.env.PARAKEET_MODEL_PATH = '../parakeet-tdt-0.6b-v2.nemo';
+  process.env.ASR_PROVIDER = 'mock';
 
   const { createHttpServer } = await import('../src/createServer');
   server = createHttpServer();
