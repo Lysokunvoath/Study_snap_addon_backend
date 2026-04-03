@@ -17,6 +17,7 @@ export class GoogleCloudSpeechProvider implements TranscriptionProvider {
   private chunkCounter = 0;
   private latestPartial = '';
   private streamWritable = false;
+  private streamConfigSent = false;
   private client: speech.SpeechClient | null = null;
   private recognizeStream: StreamingRecognizeStream | null = null;
 
@@ -28,22 +29,12 @@ export class GoogleCloudSpeechProvider implements TranscriptionProvider {
     this.startedAtMs = Date.now();
     this.isClosed = false;
     this.streamWritable = true;
+    this.streamConfigSent = false;
 
     this.client = buildSpeechClient();
 
     this.recognizeStream = this.client
-      .streamingRecognize({
-        config: {
-          encoding: 'LINEAR16',
-          sampleRateHertz: config.sampleRate,
-          languageCode: mapLanguageCode(config.language),
-          model: env.googleSpeechModel,
-          useEnhanced: false,
-          enableAutomaticPunctuation: true,
-        },
-        interimResults: true,
-        singleUtterance: false,
-      })
+      .streamingRecognize()
       .on('error', (error: Error) => {
         this.streamWritable = false;
         this.callbacks.onError(error);
@@ -57,6 +48,22 @@ export class GoogleCloudSpeechProvider implements TranscriptionProvider {
       .on('data', (data: unknown) => {
         this.handleRecognitionData(data);
       });
+
+    this.recognizeStream.write({
+      streamingConfig: {
+        config: {
+          encoding: 'LINEAR16',
+          sampleRateHertz: config.sampleRate,
+          languageCode: mapLanguageCode(config.language),
+          model: env.googleSpeechModel,
+          useEnhanced: false,
+          enableAutomaticPunctuation: true,
+        },
+        interimResults: true,
+        singleUtterance: false,
+      },
+    });
+    this.streamConfigSent = true;
 
     logger.info('Google Cloud Speech stream started', {
       language: config.language,
@@ -72,6 +79,10 @@ export class GoogleCloudSpeechProvider implements TranscriptionProvider {
     }
 
     if (!this.streamWritable || !canWriteToStream(this.recognizeStream)) {
+      return;
+    }
+
+    if (!this.streamConfigSent) {
       return;
     }
 
