@@ -16,6 +16,7 @@ export class GoogleCloudSpeechProvider implements TranscriptionProvider {
   private isClosed = false;
   private chunkCounter = 0;
   private latestPartial = '';
+  private streamWritable = false;
   private client: speech.SpeechClient | null = null;
   private recognizeStream: StreamingRecognizeStream | null = null;
 
@@ -26,6 +27,7 @@ export class GoogleCloudSpeechProvider implements TranscriptionProvider {
   public async startStream(config: StreamConfig): Promise<void> {
     this.startedAtMs = Date.now();
     this.isClosed = false;
+    this.streamWritable = true;
 
     this.client = buildSpeechClient();
 
@@ -43,7 +45,14 @@ export class GoogleCloudSpeechProvider implements TranscriptionProvider {
         singleUtterance: false,
       })
       .on('error', (error: Error) => {
+        this.streamWritable = false;
         this.callbacks.onError(error);
+      })
+      .on('close', () => {
+        this.streamWritable = false;
+      })
+      .on('end', () => {
+        this.streamWritable = false;
       })
       .on('data', (data: unknown) => {
         this.handleRecognitionData(data);
@@ -59,11 +68,20 @@ export class GoogleCloudSpeechProvider implements TranscriptionProvider {
 
   public async sendAudio(chunk: Buffer): Promise<void> {
     if (this.isClosed || this.startedAtMs === null || !this.recognizeStream) {
-      throw new Error('Google Cloud Speech stream is not active');
+      return;
+    }
+
+    if (!this.streamWritable || !canWriteToStream(this.recognizeStream)) {
+      return;
     }
 
     this.chunkCounter += 1;
-    this.recognizeStream.write({ audioContent: chunk });
+
+    try {
+      this.recognizeStream.write({ audioContent: chunk });
+    } catch {
+      this.streamWritable = false;
+    }
   }
 
   public async close(): Promise<void> {
@@ -72,9 +90,15 @@ export class GoogleCloudSpeechProvider implements TranscriptionProvider {
     }
 
     this.isClosed = true;
+    this.streamWritable = false;
 
     if (this.recognizeStream) {
-      this.recognizeStream.end();
+      try {
+        this.recognizeStream.end();
+      } catch {
+        // Ignore shutdown races for already-destroyed streams.
+      }
+
       this.recognizeStream.removeAllListeners();
       this.recognizeStream = null;
     }
@@ -120,6 +144,29 @@ export class GoogleCloudSpeechProvider implements TranscriptionProvider {
       endMs: Math.max(0, elapsed),
     };
   }
+}
+
+function canWriteToStream(stream: StreamingRecognizeStream): boolean {
+  const candidate = stream as unknown as {
+    destroyed?: boolean;
+    writable?: boolean;
+    writableEnded?: boolean;
+    writableFinished?: boolean;
+  };
+
+  if (candidate.destroyed) {
+    return false;
+  }
+
+  if (candidate.writableEnded || candidate.writableFinished) {
+    return false;
+  }
+
+  if (candidate.writable === false) {
+    return false;
+  }
+
+  return true;
 }
 
 function buildSpeechClient(): speech.SpeechClient {
