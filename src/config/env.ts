@@ -3,6 +3,16 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+function getGoogleCredentialsJson(): string {
+  // Support common naming variants used in deployment dashboards.
+  return (
+    process.env.GOOGLE_CLOUD_CREDENTIALS_JSON ??
+    process.env.GOOGLE_CLOUD_CREDENTIAL_JSON ??
+    process.env.GOOGLE_CLOUD_CREDENTIALIAL_JSON ??
+    ''
+  );
+}
+
 function getNumberEnv(name: string, fallback: number): number {
   const rawValue = process.env[name];
 
@@ -48,6 +58,6 @@ export const env = {
   wsMaxPayloadBytes: getNumberEnv('WS_MAX_PAYLOAD_BYTES', 512 * 1024),
   wsMaxMessagesPer10s: getNumberEnv('WS_MAX_MESSAGES_PER_10S', 60),
   googleProjectId: process.env.GOOGLE_CLOUD_PROJECT_ID ?? '',
-  googleCredentialsJson: process.env.GOOGLE_CLOUD_CREDENTIALS_JSON ?? '',
+  googleCredentialsJson: getGoogleCredentialsJson(),
   googleSpeechModel: process.env.GOOGLE_SPEECH_MODEL ?? 'latest_long',
 };
