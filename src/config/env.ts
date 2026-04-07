@@ -60,4 +60,7 @@ export const env = {
   googleProjectId: process.env.GOOGLE_CLOUD_PROJECT_ID ?? '',
   googleCredentialsJson: getGoogleCredentialsJson(),
   googleSpeechModel: process.env.GOOGLE_SPEECH_MODEL ?? 'latest_long',
+  googleOauthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID ?? '',
+  googleOauthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? '',
+  googleOauthRedirectUri: process.env.GOOGLE_OAUTH_REDIRECT_URI ?? '',
 };

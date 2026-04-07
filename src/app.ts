@@ -3,6 +3,8 @@ import express from 'express';
 import { env } from './config/env';
 import { healthRouter } from './routes/health';
 import { sessionRouter } from './routes/session';
+import { googleSyncRouter } from './routes/googleSync';
+import { transcriptRouter } from './routes/transcript';
 
 export function createApp() {
   const app = express();
@@ -18,6 +20,8 @@ export function createApp() {
 
   app.use(healthRouter);
   app.use(sessionRouter);
+  app.use(googleSyncRouter);
+  app.use(transcriptRouter);
 
   return app;
 }
