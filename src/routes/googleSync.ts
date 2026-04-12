@@ -276,6 +276,11 @@ function pickTranscriptDocument(files: DriveDocFile[], meetingCode: string): Dri
     ? scored.filter((entry) => normalizeForMatch(entry.file.name ?? '').includes(normalizedMeetingCode))
     : scored.filter((entry) => containsTranscriptKeyword(entry.file.name ?? ''));
 
+  // If caller provided a meeting code, do not fall back to unrelated docs.
+  if (normalizedMeetingCode && !filtered.length) {
+    return undefined;
+  }
+
   const pool = filtered.length ? filtered : scored;
   pool.sort((a, b) => b.score - a.score || b.modifiedMs - a.modifiedMs);
 
