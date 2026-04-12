@@ -137,7 +137,7 @@ googleSyncRouter.post('/api/google/transcript/sync', async (req, res) => {
 
     let query = "mimeType='application/vnd.google-apps.document' and trashed=false";
     if (meetingCode) {
-      query += ` and name contains '${meetingCode.replace(/'/g, "\\'")}'`;
+      query += ` and name contains '${toDriveQueryLiteral(meetingCode)}'`;
     }
 
     const fileList = await drive.files.list({
@@ -148,13 +148,18 @@ googleSyncRouter.post('/api/google/transcript/sync', async (req, res) => {
     });
 
     const files = fileList.data.files ?? [];
-    const transcriptFile =
-      files.find((file: { name?: string | null }) => /transcript|meeting/i.test(file.name ?? '')) ??
-      files[0];
+    const transcriptFile = pickTranscriptDocument(files, meetingCode);
 
     if (!transcriptFile?.id) {
+      if (meetingCode) {
+        return res.status(404).json({
+          error: `No transcript document matched meeting code "${meetingCode}". Try the exact Meet code (example: abc-defg-hij).`,
+        });
+      }
+
       return res.status(404).json({
-        error: 'No transcript document found for this account.',
+        error:
+          'No transcript document found for this account. Start Meet transcript first, then sync again.',
       });
     }
 
@@ -208,6 +213,73 @@ function extractGoogleDocText(doc: unknown): string {
   }
 
   return chunks.join('');
+}
+
+type DriveDocFile = {
+  id?: string | null;
+  name?: string | null;
+  modifiedTime?: string | null;
+};
+
+function toDriveQueryLiteral(value: string): string {
+  return value.replace(/'/g, "\\'");
+}
+
+function normalizeForMatch(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function containsTranscriptKeyword(name: string): boolean {
+  return /transcript|meeting transcript|captions?/i.test(name);
+}
+
+function pickTranscriptDocument(files: DriveDocFile[], meetingCode: string): DriveDocFile | undefined {
+  if (!files.length) {
+    return undefined;
+  }
+
+  const normalizedMeetingCode = normalizeForMatch(meetingCode);
+
+  const scored = files.map((file) => {
+    const name = file.name ?? '';
+    const normalizedName = normalizeForMatch(name);
+    let score = 0;
+
+    if (containsTranscriptKeyword(name)) {
+      score += 100;
+    }
+
+    if (normalizedMeetingCode) {
+      if (normalizedName.includes(normalizedMeetingCode)) {
+        score += 400;
+      }
+
+      const meetingParts = meetingCode
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((part) => part.length >= 2);
+
+      const matchedParts = meetingParts.filter((part) => name.toLowerCase().includes(part)).length;
+      score += matchedParts * 40;
+    }
+
+    const modifiedMs = file.modifiedTime ? Date.parse(file.modifiedTime) : 0;
+    const freshnessBonus = Number.isFinite(modifiedMs)
+      ? Math.max(0, 24 * 60 * 60 * 1000 - (Date.now() - modifiedMs)) / (60 * 60 * 1000)
+      : 0;
+    score += freshnessBonus;
+
+    return { file, score, modifiedMs: Number.isFinite(modifiedMs) ? modifiedMs : 0 };
+  });
+
+  const filtered = normalizedMeetingCode
+    ? scored.filter((entry) => normalizeForMatch(entry.file.name ?? '').includes(normalizedMeetingCode))
+    : scored.filter((entry) => containsTranscriptKeyword(entry.file.name ?? ''));
+
+  const pool = filtered.length ? filtered : scored;
+  pool.sort((a, b) => b.score - a.score || b.modifiedMs - a.modifiedMs);
+
+  return pool[0]?.file;
 }
 
 function randomId(): string {
