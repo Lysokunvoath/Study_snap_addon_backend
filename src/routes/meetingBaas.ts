@@ -280,13 +280,16 @@ meetingBaasRouter.post('/api/bot/webhook', (req, res) => {
     type?: string;
     data?: {
       bot_id?: string;
-      status?: string;
+      status?: string | { code?: string; created_at?: string };
       message?: string;
       text?: string;
       content?: string;
       speaker?: string;
       participant_name?: string;
+      sender_name?: string;
+      transcription?: string;
       timestamp?: string;
+      sent_at?: string;
       meeting_url?: string;
     };
     bot_id?: string;
@@ -296,7 +299,10 @@ meetingBaasRouter.post('/api/bot/webhook', (req, res) => {
     content?: string;
     speaker?: string;
     participant_name?: string;
+    sender_name?: string;
+    transcription?: string;
     timestamp?: string;
+    sent_at?: string;
     meeting_url?: string;
   };
 
@@ -307,17 +313,30 @@ meetingBaasRouter.post('/api/bot/webhook', (req, res) => {
   }
 
   const meetingUrl = String(payload.data?.meeting_url ?? payload.meeting_url ?? '').trim();
-  const status = String(payload.data?.status ?? payload.status ?? '').trim();
+  const statusFromData = payload.data?.status;
+  const statusCode =
+    typeof statusFromData === 'string'
+      ? statusFromData
+      : String(statusFromData?.code ?? payload.status ?? '').trim();
   const text = String(payload.data?.message ?? payload.data?.text ?? payload.data?.content ?? payload.message ?? payload.text ?? payload.content ?? '').trim();
-  const speaker = String(payload.data?.speaker ?? payload.data?.participant_name ?? payload.speaker ?? payload.participant_name ?? '').trim();
-  const timestamp = String(payload.data?.timestamp ?? payload.timestamp ?? new Date().toISOString());
+  const speaker = String(
+    payload.data?.speaker ??
+      payload.data?.participant_name ??
+      payload.data?.sender_name ??
+      payload.speaker ??
+      payload.participant_name ??
+      payload.sender_name ??
+      ''
+  ).trim();
+  const timestamp = String(payload.data?.timestamp ?? payload.data?.sent_at ?? payload.timestamp ?? payload.sent_at ?? new Date().toISOString());
+  const transcriptionUrl = String(payload.data?.transcription ?? payload.transcription ?? '').trim();
 
   const existing = sessionsByBotId.get(botId);
   const session: BotSession =
     existing ?? {
       botId,
       meetingUrl,
-      status: status || eventType || 'unknown',
+      status: statusCode || eventType || 'unknown',
       lines: [],
       signatures: new Set<string>(),
       seq: 0,
@@ -327,29 +346,20 @@ meetingBaasRouter.post('/api/bot/webhook', (req, res) => {
     session.meetingUrl = meetingUrl;
   }
 
-  if (status) {
-    session.status = status;
+  if (statusCode) {
+    session.status = statusCode;
   } else if (eventType) {
     session.status = eventType;
   }
 
   if (text && /chat_message|transcript|caption/i.test(eventType || '')) {
-    const signature = `${speaker.toLowerCase()}|${text.toLowerCase()}`;
-    if (!session.signatures.has(signature)) {
-      session.signatures.add(signature);
-      session.seq += 1;
-      session.lines.push({
-        seq: session.seq,
-        text,
-        speaker: speaker || null,
-        timestamp,
-      });
+    appendLine(session, text, speaker || null, timestamp);
+  }
 
-      if (session.lines.length > 1500) {
-        const overflow = session.lines.length - 1500;
-        session.lines.splice(0, overflow);
-      }
-    }
+  if (eventType === 'bot.completed' && transcriptionUrl) {
+    hydrateSessionFromTranscriptionUrl(session, transcriptionUrl).catch(() => {
+      // Ignore artifact fetch errors in webhook response path.
+    });
   }
 
   sessionsByBotId.set(botId, session);
@@ -365,6 +375,72 @@ async function meetingBaasFetch(path: string, init: RequestInit): Promise<Respon
       ...(init.headers ?? {}),
     },
   });
+}
+
+function appendLine(session: BotSession, text: string, speaker: string | null, timestamp: string): void {
+  const normalizedText = text.trim();
+  if (!normalizedText) {
+    return;
+  }
+
+  const signature = `${(speaker ?? '').toLowerCase()}|${normalizedText.toLowerCase()}`;
+  if (session.signatures.has(signature)) {
+    return;
+  }
+
+  session.signatures.add(signature);
+  session.seq += 1;
+  session.lines.push({
+    seq: session.seq,
+    text: normalizedText,
+    speaker,
+    timestamp,
+  });
+
+  if (session.lines.length > 1500) {
+    const overflow = session.lines.length - 1500;
+    session.lines.splice(0, overflow);
+  }
+}
+
+async function hydrateSessionFromTranscriptionUrl(
+  session: BotSession,
+  transcriptionUrl: string
+): Promise<void> {
+  const response = await fetch(transcriptionUrl);
+  if (!response.ok) {
+    return;
+  }
+
+  const data = (await response.json()) as {
+    result?: {
+      utterances?: Array<{
+        text?: string;
+        speaker?: string;
+        start?: number;
+      }>;
+    };
+    utterances?: Array<{
+      text?: string;
+      speaker?: string;
+      start?: number;
+    }>;
+  };
+
+  const utterances = data.result?.utterances ?? data.utterances ?? [];
+  for (const utterance of utterances) {
+    const text = (utterance.text ?? '').trim();
+    if (!text) {
+      continue;
+    }
+
+    appendLine(
+      session,
+      text,
+      utterance.speaker ? String(utterance.speaker) : null,
+      new Date().toISOString()
+    );
+  }
 }
 
 type MeetingBaasBot = {
