@@ -5,6 +5,7 @@ import { healthRouter } from './routes/health';
 import { sessionRouter } from './routes/session';
 import { googleSyncRouter } from './routes/googleSync';
 import { transcriptRouter } from './routes/transcript';
+import { meetingBaasRouter } from './routes/meetingBaas';
 
 export function createApp() {
   const app = express();
@@ -22,6 +23,7 @@ export function createApp() {
   app.use(sessionRouter);
   app.use(googleSyncRouter);
   app.use(transcriptRouter);
+  app.use(meetingBaasRouter);
 
   return app;
 }

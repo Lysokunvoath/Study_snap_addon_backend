@@ -63,4 +63,8 @@ export const env = {
   googleOauthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID ?? '',
   googleOauthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? '',
   googleOauthRedirectUri: process.env.GOOGLE_OAUTH_REDIRECT_URI ?? '',
+  meetingBaasApiKey: process.env.MEETINGBAAS_API_KEY ?? '',
+  meetingBaasBaseUrl: process.env.MEETINGBAAS_BASE_URL ?? 'https://api.meetingbaas.com',
+  meetingBaasWebhookSecret: process.env.MEETINGBAAS_WEBHOOK_SECRET ?? '',
+  meetingBaasBotName: process.env.MEETINGBAAS_BOT_NAME ?? 'Study Snap Bot',
 };
