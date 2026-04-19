@@ -27,6 +27,18 @@ type BotSession = {
 };
 
 const sessionsByBotId = new Map<string, BotSession>();
+const TERMINAL_STATUSES = new Set([
+  'completed',
+  'failed',
+  'recording_failed',
+  'call_ended',
+  'api_request_stop',
+  'bot_removed',
+  'bot_removed_too_early',
+  'waiting_room_timeout',
+  'invalid_meeting_url',
+  'meeting_error',
+]);
 
 export const meetingBaasRouter = Router();
 
@@ -66,6 +78,30 @@ meetingBaasRouter.post('/api/bot/start', async (req, res) => {
 
     if (!response.ok) {
       const text = await response.text();
+
+      // Deduplication can return 409 when a bot already exists for this meeting URL.
+      if (response.status === 409 && text.includes('FST_ERR_BOT_ALREADY_EXISTS')) {
+        const existingBot = await findExistingBotForMeeting(meetingUrl);
+        if (existingBot?.bot_id) {
+          const existing = sessionsByBotId.get(existingBot.bot_id);
+          sessionsByBotId.set(existingBot.bot_id, {
+            botId: existingBot.bot_id,
+            meetingUrl,
+            status: existingBot.status ?? existing?.status ?? 'queued',
+            lines: existing?.lines ?? [],
+            signatures: existing?.signatures ?? new Set<string>(),
+            seq: existing?.seq ?? 0,
+          });
+
+          return res.json({
+            botId: existingBot.bot_id,
+            status: existingBot.status ?? 'queued',
+            meetingUrl,
+            reused: true,
+          });
+        }
+      }
+
       return res.status(response.status).json({
         error: `Meeting BaaS create bot failed: ${text}`,
       });
@@ -128,6 +164,7 @@ meetingBaasRouter.post('/api/bot/stop', async (req, res) => {
       headers: {
         'Content-Type': 'application/json',
       },
+      body: JSON.stringify({}),
     });
 
     if (!response.ok) {
@@ -328,4 +365,41 @@ async function meetingBaasFetch(path: string, init: RequestInit): Promise<Respon
       ...(init.headers ?? {}),
     },
   });
+}
+
+type MeetingBaasBot = {
+  bot_id?: string;
+  status?: string;
+  created_at?: string;
+  meeting_url?: string;
+};
+
+async function findExistingBotForMeeting(meetingUrl: string): Promise<MeetingBaasBot | null> {
+  const query = new URLSearchParams({
+    limit: '25',
+    meeting_url: meetingUrl,
+  });
+
+  const response = await meetingBaasFetch(`/v2/bots?${query.toString()}`, {
+    method: 'GET',
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const json = (await response.json()) as { data?: MeetingBaasBot[] };
+  const bots = (json.data ?? []).filter((bot) => bot.bot_id);
+  if (!bots.length) {
+    return null;
+  }
+
+  const sorted = [...bots].sort((a, b) => {
+    const aTs = a.created_at ? Date.parse(a.created_at) : 0;
+    const bTs = b.created_at ? Date.parse(b.created_at) : 0;
+    return bTs - aTs;
+  });
+
+  const active = sorted.find((bot) => !TERMINAL_STATUSES.has((bot.status ?? '').toLowerCase()));
+  return active ?? sorted[0] ?? null;
 }
