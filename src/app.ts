@@ -6,6 +6,7 @@ import { sessionRouter } from './routes/session';
 import { googleSyncRouter } from './routes/googleSync';
 import { transcriptRouter } from './routes/transcript';
 import { meetingBaasRouter } from './routes/meetingBaas';
+import { studyRouter } from './routes/study';
 
 export function createApp() {
   const app = express();
@@ -24,6 +25,7 @@ export function createApp() {
   app.use(googleSyncRouter);
   app.use(transcriptRouter);
   app.use(meetingBaasRouter);
+  app.use(studyRouter);
 
   return app;
 }

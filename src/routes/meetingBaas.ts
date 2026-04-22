@@ -1,9 +1,17 @@
 import { Router } from 'express';
 import { env } from '../config/env';
+import {
+  fetchBotSessionStatusRecord,
+  fetchTranscriptLinesRecord,
+  upsertBotSessionRecord,
+  upsertTranscriptLineRecord,
+  updateBotSessionStatusRecord,
+} from '../db/supabase';
 
 type BotStartBody = {
   meetingUrl?: string;
   botName?: string;
+  userId?: string;
 };
 
 type BotStopBody = {
@@ -46,6 +54,7 @@ meetingBaasRouter.post('/api/bot/start', async (req, res) => {
   const body = (req.body ?? {}) as BotStartBody;
   const meetingUrl = (body.meetingUrl ?? '').trim();
   const botName = (body.botName ?? env.meetingBaasBotName).trim() || env.meetingBaasBotName;
+  const userId = (body.userId ?? '').trim() || undefined;
 
   if (!env.meetingBaasApiKey) {
     return res.status(400).json({
@@ -93,6 +102,13 @@ meetingBaasRouter.post('/api/bot/start', async (req, res) => {
             seq: existing?.seq ?? 0,
           });
 
+          void upsertBotSessionRecord({
+            botId: existingBot.bot_id,
+            meetingUrl,
+            status: existingBot.status ?? existing?.status ?? 'queued',
+            userId,
+          });
+
           return res.json({
             botId: existingBot.bot_id,
             status: existingBot.status ?? 'queued',
@@ -128,6 +144,13 @@ meetingBaasRouter.post('/api/bot/start', async (req, res) => {
       lines: existing?.lines ?? [],
       signatures: existing?.signatures ?? new Set<string>(),
       seq: existing?.seq ?? 0,
+    });
+
+    void upsertBotSessionRecord({
+      botId,
+      meetingUrl,
+      status: existing?.status ?? 'queued',
+      userId,
     });
 
     return res.json({
@@ -179,6 +202,8 @@ meetingBaasRouter.post('/api/bot/stop', async (req, res) => {
       session.status = 'api_request_stop';
     }
 
+    void updateBotSessionStatusRecord(botId, 'api_request_stop');
+
     return res.json({
       stopped: true,
       botId,
@@ -199,9 +224,10 @@ meetingBaasRouter.get('/api/bot/status', async (req, res) => {
   const local = sessionsByBotId.get(botId);
 
   if (!env.meetingBaasApiKey) {
+    const status = local?.status ?? (await fetchBotSessionStatusRecord(botId)) ?? 'unknown';
     return res.json({
       botId,
-      status: local?.status ?? 'unknown',
+      status,
       lineCount: local?.lines.length ?? 0,
     });
   }
@@ -230,6 +256,8 @@ meetingBaasRouter.get('/api/bot/status', async (req, res) => {
       local.status = status;
     }
 
+    void updateBotSessionStatusRecord(botId, status);
+
     return res.json({
       botId,
       status,
@@ -244,7 +272,7 @@ meetingBaasRouter.get('/api/bot/status', async (req, res) => {
   }
 });
 
-meetingBaasRouter.get('/api/bot/transcript', (req, res) => {
+meetingBaasRouter.get('/api/bot/transcript', async (req, res) => {
   const botId = String(req.query.botId ?? '').trim();
   const sinceSeqRaw = String(req.query.sinceSeq ?? '').trim();
   const sinceSeq = Number.isFinite(Number(sinceSeqRaw)) ? Number(sinceSeqRaw) : 0;
@@ -254,20 +282,34 @@ meetingBaasRouter.get('/api/bot/transcript', (req, res) => {
   }
 
   const session = sessionsByBotId.get(botId);
-  if (!session) {
+  const memoryLines = session ? session.lines.filter((line) => line.seq > sinceSeq).slice(0, 300) : [];
+
+  if (memoryLines.length > 0) {
+    return res.json({
+      botId,
+      status: session?.status ?? 'unknown',
+      lines: memoryLines,
+      latestSeq: session?.seq ?? sinceSeq,
+    });
+  }
+
+  const dbLines = await fetchTranscriptLinesRecord(botId, sinceSeq, 300);
+  const dbStatus = await fetchBotSessionStatusRecord(botId);
+
+  if (!session && dbLines.length === 0 && !dbStatus) {
     return res.status(404).json({ error: 'Unknown botId.' });
   }
 
-  const lines = session.lines.filter((line) => line.seq > sinceSeq).slice(0, 300);
+  const latestSeqFromDb = dbLines.length ? dbLines[dbLines.length - 1]?.seq ?? sinceSeq : sinceSeq;
   return res.json({
     botId,
-    status: session.status,
-    lines,
-    latestSeq: session.seq,
+    status: session?.status ?? dbStatus ?? 'unknown',
+    lines: dbLines,
+    latestSeq: Math.max(session?.seq ?? sinceSeq, latestSeqFromDb),
   });
 });
 
-meetingBaasRouter.post('/api/bot/webhook', (req, res) => {
+meetingBaasRouter.post('/api/bot/webhook', async (req, res) => {
   const secretHeader =
     String(req.headers['x-meetingbaas-webhook-secret'] ?? req.headers['x-meeting-baas-webhook-secret'] ?? '').trim();
 
@@ -363,6 +405,12 @@ meetingBaasRouter.post('/api/bot/webhook', (req, res) => {
   }
 
   sessionsByBotId.set(botId, session);
+  await upsertBotSessionRecord({
+    botId,
+    meetingUrl: session.meetingUrl,
+    status: session.status,
+  });
+
   return res.json({ ok: true });
 });
 
@@ -391,6 +439,14 @@ function appendLine(session: BotSession, text: string, speaker: string | null, t
   session.signatures.add(signature);
   session.seq += 1;
   session.lines.push({
+    seq: session.seq,
+    text: normalizedText,
+    speaker,
+    timestamp,
+  });
+
+  void upsertTranscriptLineRecord({
+    botId: session.botId,
     seq: session.seq,
     text: normalizedText,
     speaker,
