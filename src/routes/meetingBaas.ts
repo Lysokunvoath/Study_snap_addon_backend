@@ -236,11 +236,9 @@ meetingBaasRouter.get('/api/bot/status', async (req, res) => {
   }
 
   try {
-    const response = await meetingBaasFetch(`/v2/bots/${encodeURIComponent(botId)}`, {
-      method: 'GET',
-    });
+    const details = await fetchBotDetails(botId);
 
-    if (!response.ok) {
+    if (!details) {
       return res.json({
         botId,
         status: local?.status ?? 'unknown',
@@ -248,15 +246,12 @@ meetingBaasRouter.get('/api/bot/status', async (req, res) => {
       });
     }
 
-    const json = (await response.json()) as {
-      data?: {
-        status?: string;
-      };
-    };
-
-    const status = json.data?.status ?? local?.status ?? 'unknown';
+    const status = String(details.status ?? '').trim() || local?.status || 'unknown';
     if (local) {
       local.status = status;
+      if (TERMINAL_STATUSES.has(status.toLowerCase()) && local.lines.length === 0) {
+        await hydrateSessionFromBotDetails(local);
+      }
     }
 
     void updateBotSessionStatusRecord(botId, status);
@@ -284,31 +279,54 @@ meetingBaasRouter.get('/api/bot/transcript', async (req, res) => {
     return res.status(400).json({ error: 'botId is required.' });
   }
 
-  const session = sessionsByBotId.get(botId);
-  const memoryLines = session ? session.lines.filter((line) => line.seq > sinceSeq).slice(0, 300) : [];
+  let session = sessionsByBotId.get(botId);
+  if (!session) {
+    session = {
+      botId,
+      meetingUrl: '',
+      status: 'unknown',
+      userId: undefined,
+      lines: [],
+      signatures: new Set<string>(),
+      seq: 0,
+    };
+  }
+
+  if (session.lines.length === 0) {
+    await hydrateSessionFromBotDetails(session);
+    sessionsByBotId.set(botId, session);
+    await upsertBotSessionRecord({
+      botId: session.botId,
+      meetingUrl: session.meetingUrl,
+      status: session.status,
+      userId: session.userId,
+    });
+  }
+
+  const memoryLines = session.lines.filter((line) => line.seq > sinceSeq).slice(0, 300);
 
   if (memoryLines.length > 0) {
     return res.json({
       botId,
-      status: session?.status ?? 'unknown',
+      status: session.status ?? 'unknown',
       lines: memoryLines,
-      latestSeq: session?.seq ?? sinceSeq,
+      latestSeq: session.seq ?? sinceSeq,
     });
   }
 
   const dbLines = await fetchTranscriptLinesRecord(botId, sinceSeq, 300);
   const dbStatus = await fetchBotSessionStatusRecord(botId);
 
-  if (!session && dbLines.length === 0 && !dbStatus) {
+  if (session.lines.length === 0 && dbLines.length === 0 && !dbStatus) {
     return res.status(404).json({ error: 'Unknown botId.' });
   }
 
   const latestSeqFromDb = dbLines.length ? dbLines[dbLines.length - 1]?.seq ?? sinceSeq : sinceSeq;
   return res.json({
     botId,
-    status: session?.status ?? dbStatus ?? 'unknown',
+    status: session.status ?? dbStatus ?? 'unknown',
     lines: dbLines,
-    latestSeq: Math.max(session?.seq ?? sinceSeq, latestSeqFromDb),
+    latestSeq: Math.max(session.seq ?? sinceSeq, latestSeqFromDb),
   });
 });
 
@@ -406,10 +424,16 @@ meetingBaasRouter.post('/api/bot/webhook', async (req, res) => {
     appendLine(session, text, speaker || null, timestamp);
   }
 
-  if (eventType === 'bot.completed' && transcriptionUrl) {
-    hydrateSessionFromTranscriptionUrl(session, transcriptionUrl).catch(() => {
-      // Ignore artifact fetch errors in webhook response path.
-    });
+  if (eventType === 'bot.completed') {
+    if (transcriptionUrl) {
+      hydrateSessionFromTranscriptionUrl(session, transcriptionUrl).catch(() => {
+        // Ignore artifact fetch errors in webhook response path.
+      });
+    } else {
+      hydrateSessionFromBotDetails(session).catch(() => {
+        // Ignore API fetch errors in webhook response path.
+      });
+    }
   }
 
   sessionsByBotId.set(botId, session);
@@ -514,6 +538,11 @@ type MeetingBaasBot = {
   status?: string;
   created_at?: string;
   meeting_url?: string;
+  transcription?: string;
+};
+
+type MeetingBaasBotDetailsResponse = {
+  data?: MeetingBaasBot;
 };
 
 async function findExistingBotForMeeting(meetingUrl: string): Promise<MeetingBaasBot | null> {
@@ -544,4 +573,43 @@ async function findExistingBotForMeeting(meetingUrl: string): Promise<MeetingBaa
 
   const active = sorted.find((bot) => !TERMINAL_STATUSES.has((bot.status ?? '').toLowerCase()));
   return active ?? sorted[0] ?? null;
+}
+
+async function fetchBotDetails(botId: string): Promise<MeetingBaasBot | null> {
+  if (!env.meetingBaasApiKey) {
+    return null;
+  }
+
+  const response = await meetingBaasFetch(`/v2/bots/${encodeURIComponent(botId)}`, {
+    method: 'GET',
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const json = (await response.json()) as MeetingBaasBotDetailsResponse;
+  return json.data ?? null;
+}
+
+async function hydrateSessionFromBotDetails(session: BotSession): Promise<void> {
+  const details = await fetchBotDetails(session.botId);
+  if (!details) {
+    return;
+  }
+
+  const status = String(details.status ?? '').trim();
+  if (status) {
+    session.status = status;
+  }
+
+  const meetingUrl = String(details.meeting_url ?? '').trim();
+  if (meetingUrl) {
+    session.meetingUrl = meetingUrl;
+  }
+
+  const transcriptionUrl = String(details.transcription ?? '').trim();
+  if (transcriptionUrl) {
+    await hydrateSessionFromTranscriptionUrl(session, transcriptionUrl);
+  }
 }
