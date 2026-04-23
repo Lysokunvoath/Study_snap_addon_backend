@@ -239,6 +239,77 @@ export async function insertStudyArtifactRecord(input: {
   }
 }
 
+export async function upsertTranscriptTextRecord(input: {
+  botId?: string | null;
+  userId?: string;
+  meetingUrl?: string;
+  title?: string;
+  transcriptText: string;
+}): Promise<{ meetingId: string | null; title: string }> {
+  const client = getSupabaseClient();
+  const cleanTranscript = String(input.transcriptText ?? '').trim();
+  const title = String(input.title ?? '').trim() || 'Meeting Transcript';
+
+  if (!client || !cleanTranscript) {
+    return { meetingId: null, title };
+  }
+
+  const timestamp = new Date().toISOString();
+
+  if (input.botId) {
+    const meeting = await ensureMeetingForBot(input.botId, {
+      userId: input.userId,
+      meetingUrl: input.meetingUrl,
+    });
+
+    if (meeting) {
+      const { data, error } = await client
+        .from('meetings')
+        .update({
+          title: title || meeting.title || deriveMeetingTitle(input.meetingUrl ?? ''),
+          transcript: cleanTranscript,
+          updated_at: timestamp,
+        })
+        .eq('id', meeting.id)
+        .select('id')
+        .maybeSingle();
+
+      if (!error && data?.id) {
+        return { meetingId: String(data.id), title };
+      }
+    }
+  }
+
+  const effectiveUserId = input.userId ?? env.supabaseDefaultUserId ?? undefined;
+  if (!effectiveUserId) {
+    return { meetingId: null, title };
+  }
+
+  const { data, error } = await client
+    .from('meetings')
+    .insert({
+      ...(effectiveUserId ? { user_id: effectiveUserId } : {}),
+      title,
+      transcript: cleanTranscript,
+      ai_notes: '',
+      recording_url: input.botId ? botRecordingUrlMarker(input.botId) : null,
+      created_at: timestamp,
+      updated_at: timestamp,
+    })
+    .select('id')
+    .single();
+
+  if (error || !data?.id) {
+    logger.warn('Supabase upsert transcript text failed', {
+      botId: input.botId ?? null,
+      error: error?.message ?? 'missing meeting id',
+    });
+    return { meetingId: null, title };
+  }
+
+  return { meetingId: String(data.id), title };
+}
+
 async function ensureMeetingForBot(
   botId: string,
   options: { userId?: string; meetingUrl?: string }
