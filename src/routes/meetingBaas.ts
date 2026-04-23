@@ -29,6 +29,7 @@ type BotSession = {
   botId: string;
   meetingUrl: string;
   status: string;
+  userId?: string;
   lines: TranscriptLine[];
   signatures: Set<string>;
   seq: number;
@@ -97,6 +98,7 @@ meetingBaasRouter.post('/api/bot/start', async (req, res) => {
             botId: existingBot.bot_id,
             meetingUrl,
             status: existingBot.status ?? existing?.status ?? 'queued',
+            userId,
             lines: existing?.lines ?? [],
             signatures: existing?.signatures ?? new Set<string>(),
             seq: existing?.seq ?? 0,
@@ -141,6 +143,7 @@ meetingBaasRouter.post('/api/bot/start', async (req, res) => {
       botId,
       meetingUrl,
       status: existing?.status ?? 'queued',
+      userId,
       lines: existing?.lines ?? [],
       signatures: existing?.signatures ?? new Set<string>(),
       seq: existing?.seq ?? 0,
@@ -379,6 +382,7 @@ meetingBaasRouter.post('/api/bot/webhook', async (req, res) => {
       botId,
       meetingUrl,
       status: statusCode || eventType || 'unknown',
+      userId: undefined,
       lines: [],
       signatures: new Set<string>(),
       seq: 0,
@@ -386,6 +390,10 @@ meetingBaasRouter.post('/api/bot/webhook', async (req, res) => {
 
   if (meetingUrl) {
     session.meetingUrl = meetingUrl;
+  }
+
+  if (existing?.userId) {
+    session.userId = existing.userId;
   }
 
   if (statusCode) {
@@ -409,6 +417,7 @@ meetingBaasRouter.post('/api/bot/webhook', async (req, res) => {
     botId,
     meetingUrl: session.meetingUrl,
     status: session.status,
+    userId: session.userId,
   });
 
   return res.json({ ok: true });
@@ -447,6 +456,7 @@ function appendLine(session: BotSession, text: string, speaker: string | null, t
 
   void upsertTranscriptLineRecord({
     botId: session.botId,
+    userId: session.userId,
     seq: session.seq,
     text: normalizedText,
     speaker,

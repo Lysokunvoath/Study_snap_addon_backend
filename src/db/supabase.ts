@@ -89,6 +89,7 @@ export async function updateBotSessionStatusRecord(botId: string, status: string
 
 export async function upsertTranscriptLineRecord(input: {
   botId: string;
+  userId?: string;
   seq: number;
   text: string;
   speaker: string | null;
@@ -99,7 +100,9 @@ export async function upsertTranscriptLineRecord(input: {
     return;
   }
 
-  const meeting = await ensureMeetingForBot(input.botId, {});
+  const meeting = await ensureMeetingForBot(input.botId, {
+    userId: input.userId,
+  });
   if (!meeting) {
     return;
   }
