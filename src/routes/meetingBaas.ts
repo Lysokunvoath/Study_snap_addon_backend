@@ -224,48 +224,70 @@ meetingBaasRouter.get('/api/bot/status', async (req, res) => {
     return res.status(400).json({ error: 'botId is required.' });
   }
 
-  const local = sessionsByBotId.get(botId);
+  let local = sessionsByBotId.get(botId);
+  if (!local) {
+    local = {
+      botId,
+      meetingUrl: '',
+      status: 'unknown',
+      userId: undefined,
+      lines: [],
+      signatures: new Set<string>(),
+      seq: 0,
+    };
+  }
 
   if (!env.meetingBaasApiKey) {
-    const status = local?.status ?? (await fetchBotSessionStatusRecord(botId)) ?? 'unknown';
+    const status = local.status || (await fetchBotSessionStatusRecord(botId)) || 'unknown';
     return res.json({
       botId,
       status,
-      lineCount: local?.lines.length ?? 0,
+      lineCount: local.lines.length,
     });
   }
 
   try {
     const details = await fetchBotDetails(botId);
-
     if (!details) {
       return res.json({
         botId,
-        status: local?.status ?? 'unknown',
-        lineCount: local?.lines.length ?? 0,
+        status: local.status || 'unknown',
+        lineCount: local.lines.length,
       });
     }
 
-    const status = String(details.status ?? '').trim() || local?.status || 'unknown';
-    if (local) {
-      local.status = status;
-      if (TERMINAL_STATUSES.has(status.toLowerCase()) && local.lines.length === 0) {
-        await hydrateSessionFromBotDetails(local);
-      }
+    const status = String(details.status ?? '').trim() || local.status || 'unknown';
+    local.status = status;
+
+    const meetingUrl = String(details.meeting_url ?? '').trim();
+    if (meetingUrl) {
+      local.meetingUrl = meetingUrl;
     }
+
+    if (TERMINAL_STATUSES.has(status.toLowerCase()) && local.lines.length === 0) {
+      await hydrateSessionFromBotDetails(local);
+    }
+
+    sessionsByBotId.set(botId, local);
+    await upsertBotSessionRecord({
+      botId: local.botId,
+      meetingUrl: local.meetingUrl,
+      status: local.status,
+      userId: local.userId,
+    });
 
     void updateBotSessionStatusRecord(botId, status);
 
     return res.json({
       botId,
       status,
-      lineCount: local?.lines.length ?? 0,
+      lineCount: local.lines.length,
     });
   } catch {
     return res.json({
       botId,
-      status: local?.status ?? 'unknown',
-      lineCount: local?.lines.length ?? 0,
+      status: local.status || 'unknown',
+      lineCount: local.lines.length,
     });
   }
 });
@@ -318,7 +340,12 @@ meetingBaasRouter.get('/api/bot/transcript', async (req, res) => {
   const dbStatus = await fetchBotSessionStatusRecord(botId);
 
   if (session.lines.length === 0 && dbLines.length === 0 && !dbStatus) {
-    return res.status(404).json({ error: 'Unknown botId.' });
+    return res.json({
+      botId,
+      status: session.status ?? 'unknown',
+      lines: [],
+      latestSeq: session.seq ?? sinceSeq,
+    });
   }
 
   const latestSeqFromDb = dbLines.length ? dbLines[dbLines.length - 1]?.seq ?? sinceSeq : sinceSeq;
@@ -502,22 +529,8 @@ async function hydrateSessionFromTranscriptionUrl(
     return;
   }
 
-  const data = (await response.json()) as {
-    result?: {
-      utterances?: Array<{
-        text?: string;
-        speaker?: string;
-        start?: number;
-      }>;
-    };
-    utterances?: Array<{
-      text?: string;
-      speaker?: string;
-      start?: number;
-    }>;
-  };
-
-  const utterances = data.result?.utterances ?? data.utterances ?? [];
+  const data = (await response.json()) as unknown;
+  const utterances = extractUtterances(data);
   for (const utterance of utterances) {
     const text = (utterance.text ?? '').trim();
     if (!text) {
@@ -531,6 +544,135 @@ async function hydrateSessionFromTranscriptionUrl(
       new Date().toISOString()
     );
   }
+
+  if (utterances.length === 0) {
+    const fallbackText = extractTranscriptText(data);
+    if (fallbackText) {
+      appendLine(session, fallbackText, null, new Date().toISOString());
+    }
+  }
+}
+
+type ExtractedUtterance = {
+  text: string;
+  speaker: string | null;
+};
+
+function extractUtterances(payload: unknown): ExtractedUtterance[] {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+
+  const record = payload as Record<string, unknown>;
+  const candidateArrays: unknown[] = [];
+
+  if (Array.isArray(record.utterances)) {
+    candidateArrays.push(record.utterances);
+  }
+  if (Array.isArray(record.segments)) {
+    candidateArrays.push(record.segments);
+  }
+  if (Array.isArray(record.transcript)) {
+    candidateArrays.push(record.transcript);
+  }
+  if (Array.isArray(record.results)) {
+    candidateArrays.push(record.results);
+  }
+
+  const resultNode =
+    record.result && typeof record.result === 'object'
+      ? (record.result as Record<string, unknown>)
+      : null;
+  if (resultNode) {
+    if (Array.isArray(resultNode.utterances)) {
+      candidateArrays.push(resultNode.utterances);
+    }
+    if (Array.isArray(resultNode.segments)) {
+      candidateArrays.push(resultNode.segments);
+    }
+    if (Array.isArray(resultNode.transcript)) {
+      candidateArrays.push(resultNode.transcript);
+    }
+    if (Array.isArray(resultNode.results)) {
+      candidateArrays.push(resultNode.results);
+    }
+  }
+
+  for (const candidate of candidateArrays) {
+    const extracted = normalizeUtteranceArray(candidate);
+    if (extracted.length > 0) {
+      return extracted;
+    }
+  }
+
+  return [];
+}
+
+function normalizeUtteranceArray(candidate: unknown): ExtractedUtterance[] {
+  if (!Array.isArray(candidate)) {
+    return [];
+  }
+
+  const results: ExtractedUtterance[] = [];
+  for (const item of candidate) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+
+    const row = item as Record<string, unknown>;
+    const textValue =
+      row.text ?? row.transcript ?? row.content ?? row.caption ?? row.message ?? row.value ?? '';
+    const text = typeof textValue === 'string' ? textValue.trim() : '';
+    if (!text) {
+      continue;
+    }
+
+    const speakerValue = row.speaker ?? row.speaker_name ?? row.participant_name ?? row.sender_name ?? null;
+    const speaker = typeof speakerValue === 'string' && speakerValue.trim() ? speakerValue.trim() : null;
+    results.push({ text, speaker });
+  }
+
+  return results;
+}
+
+function extractTranscriptText(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') {
+    return '';
+  }
+
+  const record = payload as Record<string, unknown>;
+  const directText =
+    record.transcript_text ??
+    record.transcription_text ??
+    record.text ??
+    record.transcript ??
+    record.content ??
+    '';
+
+  if (typeof directText === 'string') {
+    return directText.trim();
+  }
+
+  if (Array.isArray(directText)) {
+    const joined = directText
+      .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+      .filter(Boolean)
+      .join('\n');
+    if (joined) {
+      return joined;
+    }
+  }
+
+  const resultNode =
+    record.result && typeof record.result === 'object'
+      ? (record.result as Record<string, unknown>)
+      : null;
+  if (!resultNode) {
+    return '';
+  }
+
+  const nestedText = resultNode.transcript_text ?? resultNode.transcription_text ?? resultNode.text ?? '';
+  return typeof nestedText === 'string' ? nestedText.trim() : '';
 }
 
 type MeetingBaasBot = {
