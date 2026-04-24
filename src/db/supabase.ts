@@ -437,7 +437,42 @@ function deriveMeetingTitle(meetingUrl: string): string {
 
 function parseTranscriptBlob(raw: string): Map<number, TranscriptLineRecord> {
   const result = new Map<number, TranscriptLineRecord>();
-  const rows = raw.split(/\r?\n/).map((row) => row.trim()).filter(Boolean);
+  const normalized = String(raw ?? '').trim();
+  if (!normalized) {
+    return result;
+  }
+
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        if (!item || typeof item !== 'object') {
+          continue;
+        }
+
+        const row = item as Record<string, unknown>;
+        const seq = Number(row.seq ?? row.sequence ?? 0);
+        const text = String(row.text ?? '').trim();
+        if (!Number.isFinite(seq) || seq <= 0 || !text) {
+          continue;
+        }
+
+        const timestamp = String(row.timestamp ?? new Date().toISOString()).trim() || new Date().toISOString();
+        const speakerValue = row.speaker ?? row.speaker_name ?? null;
+        const speaker = typeof speakerValue === 'string' && speakerValue.trim() ? speakerValue.trim() : null;
+
+        result.set(seq, { seq, text, speaker, timestamp });
+      }
+
+      if (result.size > 0) {
+        return result;
+      }
+    }
+  } catch {
+    // Fall back to the legacy line-based blob format.
+  }
+
+  const rows = normalized.split(/\r?\n/).map((row) => row.trim()).filter(Boolean);
 
   if (rows.length === 0) {
     return result;
@@ -481,14 +516,16 @@ function parseTranscriptBlob(raw: string): Map<number, TranscriptLineRecord> {
 }
 
 function serializeTranscriptBlob(lines: Map<number, TranscriptLineRecord>): string {
-  return [...lines.values()]
+  return JSON.stringify(
+    [...lines.values()]
     .sort((a, b) => a.seq - b.seq)
-    .map((line) => {
-      const speaker = encodeBlobField(line.speaker ?? '');
-      const text = encodeBlobField(line.text);
-      return `${line.seq}\t${line.timestamp}\t${speaker}\t${text}`;
-    })
-    .join('\n');
+    .map((line) => ({
+      seq: line.seq,
+      timestamp: line.timestamp,
+      speaker: line.speaker,
+      text: line.text,
+    }))
+  );
 }
 
 function encodeBlobField(value: string): string {
