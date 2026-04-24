@@ -27,6 +27,7 @@ type MeetingRow = {
 
 let supabaseClient: SupabaseClient | null = null;
 const BOT_RECORDING_URL_PREFIX = 'meetingbaas://bot/';
+const transcriptWriteQueueByBotId = new Map<string, Promise<void>>();
 
 function getSupabaseClient(): SupabaseClient | null {
   if (!env.supabaseUrl || !env.supabaseServiceRoleKey) {
@@ -95,39 +96,58 @@ export async function upsertTranscriptLineRecord(input: {
   speaker: string | null;
   timestamp: string;
 }): Promise<void> {
-  const client = getSupabaseClient();
-  if (!client) {
-    return;
-  }
+  await enqueueTranscriptWrite(input.botId, async () => {
+    const client = getSupabaseClient();
+    if (!client) {
+      return;
+    }
 
-  const meeting = await ensureMeetingForBot(input.botId, {
-    userId: input.userId,
-  });
-  if (!meeting) {
-    return;
-  }
-
-  const parsed = parseTranscriptBlob(meeting.transcript ?? '');
-  parsed.set(input.seq, {
-    seq: input.seq,
-    text: input.text,
-    speaker: input.speaker,
-    timestamp: input.timestamp,
-  });
-
-  const transcript = serializeTranscriptBlob(parsed);
-  const { error } = await client
-    .from('meetings')
-    .update({ transcript, updated_at: new Date().toISOString() })
-    .eq('id', meeting.id);
-
-  if (error) {
-    logger.warn('Supabase update meeting transcript failed', {
-      botId: input.botId,
-      seq: input.seq,
-      error: error.message,
+    const meeting = await ensureMeetingForBot(input.botId, {
+      userId: input.userId,
     });
-  }
+    if (!meeting) {
+      return;
+    }
+
+    const parsed = parseTranscriptBlob(meeting.transcript ?? '');
+    parsed.set(input.seq, {
+      seq: input.seq,
+      text: input.text,
+      speaker: input.speaker,
+      timestamp: input.timestamp,
+    });
+
+    const transcript = serializeTranscriptBlob(parsed);
+    const { error } = await client
+      .from('meetings')
+      .update({ transcript, updated_at: new Date().toISOString() })
+      .eq('id', meeting.id);
+
+    if (error) {
+      logger.warn('Supabase update meeting transcript failed', {
+        botId: input.botId,
+        seq: input.seq,
+        error: error.message,
+      });
+    }
+  });
+}
+
+function enqueueTranscriptWrite(botId: string, operation: () => Promise<void>): Promise<void> {
+  const previous = transcriptWriteQueueByBotId.get(botId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => {
+      // Keep the queue alive even if a previous write failed.
+    })
+    .then(operation);
+
+  transcriptWriteQueueByBotId.set(botId, next);
+
+  return next.finally(() => {
+    if (transcriptWriteQueueByBotId.get(botId) === next) {
+      transcriptWriteQueueByBotId.delete(botId);
+    }
+  });
 }
 
 export async function fetchTranscriptLinesRecord(
