@@ -548,7 +548,9 @@ async function hydrateSessionFromTranscriptionUrl(
   if (utterances.length === 0) {
     const fallbackText = extractTranscriptText(data);
     if (fallbackText) {
-      appendLine(session, fallbackText, null, new Date().toISOString());
+      for (const line of splitTranscriptIntoLines(fallbackText)) {
+        appendLine(session, line, null, new Date().toISOString());
+      }
     }
   }
 }
@@ -598,14 +600,15 @@ function extractUtterances(payload: unknown): ExtractedUtterance[] {
     }
   }
 
+  let best: ExtractedUtterance[] = [];
   for (const candidate of candidateArrays) {
     const extracted = normalizeUtteranceArray(candidate);
-    if (extracted.length > 0) {
-      return extracted;
+    if (extracted.length > best.length) {
+      best = extracted;
     }
   }
 
-  return [];
+  return best;
 }
 
 function normalizeUtteranceArray(candidate: unknown): ExtractedUtterance[] {
@@ -673,6 +676,27 @@ function extractTranscriptText(payload: unknown): string {
 
   const nestedText = resultNode.transcript_text ?? resultNode.transcription_text ?? resultNode.text ?? '';
   return typeof nestedText === 'string' ? nestedText.trim() : '';
+}
+
+function splitTranscriptIntoLines(text: string): string[] {
+  const normalized = text.replace(/\r\n/g, '\n').trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const byLines = normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (byLines.length > 1) {
+    return byLines;
+  }
+
+  return normalized
+    .split(/(?<=[.!?])\s+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 type MeetingBaasBot = {
