@@ -325,33 +325,23 @@ async function ensureMeetingForBot(
   const existing = await findMeetingByBotId(client, botId);
   if (existing) {
     const requestedUserId = options.userId?.trim();
-    if (requestedUserId && existing.user_id !== requestedUserId) {
-      const { data: reassigned, error: reassignError } = await client
+    if (requestedUserId && !existing.user_id) {
+      const { error: ownershipError } = await client
         .from('meetings')
         .update({
           user_id: requestedUserId,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', existing.id)
-        .select('id,user_id,title,transcript,ai_notes,recording_url')
-        .maybeSingle();
+        .eq('id', existing.id);
 
-      if (reassignError || !reassigned) {
-        logger.warn('Supabase meeting ownership reassignment failed', {
+      if (ownershipError) {
+        logger.warn('Supabase meeting ownership assignment failed', {
           botId,
-          fromUserId: existing.user_id,
           toUserId: requestedUserId,
-          error: reassignError?.message ?? 'missing meeting row',
+          error: ownershipError.message,
         });
       } else {
-        return {
-          id: String(reassigned.id),
-          user_id: reassigned.user_id ? String(reassigned.user_id) : null,
-          title: reassigned.title ? String(reassigned.title) : null,
-          transcript: reassigned.transcript ? String(reassigned.transcript) : null,
-          ai_notes: reassigned.ai_notes ? String(reassigned.ai_notes) : null,
-          recording_url: reassigned.recording_url ? String(reassigned.recording_url) : null,
-        };
+        existing.user_id = requestedUserId;
       }
     }
 
