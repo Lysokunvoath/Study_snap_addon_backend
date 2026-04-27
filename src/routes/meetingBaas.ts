@@ -48,6 +48,7 @@ const TERMINAL_STATUSES = new Set([
   'invalid_meeting_url',
   'meeting_error',
 ]);
+const DISABLE_TRANSCRIPT_DEDUPE_FOR_DEBUG = true;
 
 export const meetingBaasRouter = Router();
 
@@ -492,11 +493,13 @@ function appendLine(session: BotSession, text: string, speaker: string | null, t
   }
 
   const signature = `${(speaker ?? '').toLowerCase()}|${normalizedText.toLowerCase()}`;
-  if (session.signatures.has(signature)) {
+  if (!DISABLE_TRANSCRIPT_DEDUPE_FOR_DEBUG && session.signatures.has(signature)) {
     return;
   }
 
-  session.signatures.add(signature);
+  if (!DISABLE_TRANSCRIPT_DEDUPE_FOR_DEBUG) {
+    session.signatures.add(signature);
+  }
   session.seq += 1;
   session.lines.push({
     seq: session.seq,
