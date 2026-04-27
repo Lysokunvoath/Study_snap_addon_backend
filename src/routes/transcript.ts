@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { upsertTranscriptTextRecord } from '../db/supabase';
+import { logger } from '../utils/logger';
 
 type TranscriptImportBody = {
   transcriptText?: string;
@@ -32,6 +33,7 @@ transcriptRouter.post('/api/transcript/import', async (req, res) => {
     .slice(0, 500);
 
   let meetingId: string | null = null;
+  let persistenceError: string | null = null;
   try {
     const result = await upsertTranscriptTextRecord({
       botId,
@@ -41,14 +43,27 @@ transcriptRouter.post('/api/transcript/import', async (req, res) => {
       transcriptText: raw,
     });
     meetingId = result.meetingId;
-  } catch {
-    // Keep the response path resilient even if transcript persistence fails.
+
+    if (!meetingId) {
+      persistenceError =
+        'Transcript received but not persisted. Ensure SUPABASE_DEFAULT_USER_ID is set or pass userId.';
+    }
+  } catch (error) {
+    persistenceError = error instanceof Error ? error.message : 'Unknown persistence error';
+    logger.warn('Transcript import persistence failed', {
+      botId,
+      userId,
+      meetingUrl,
+      error: persistenceError,
+    });
   }
 
   return res.json({
     importedLineCount: lines.length,
     lines,
     meetingId,
+    persisted: !!meetingId,
+    persistenceError,
     title: title ?? 'Meeting Transcript',
   });
 });
