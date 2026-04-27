@@ -356,6 +356,21 @@ export async function upsertTranscriptTextRecord(input: {
   return { meetingId: String(data.id), title };
 }
 
+export async function ensureMeetingRecordForBot(input: {
+  botId: string;
+  userId?: string;
+  meetingUrl?: string;
+}): Promise<{ meetingId: string | null }> {
+  const meeting = await ensureMeetingForBot(input.botId, {
+    userId: input.userId,
+    meetingUrl: input.meetingUrl,
+  });
+
+  return {
+    meetingId: meeting?.id ?? null,
+  };
+}
+
 async function ensureMeetingForBot(
   botId: string,
   options: { userId?: string; meetingUrl?: string }

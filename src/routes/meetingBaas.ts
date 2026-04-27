@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { env } from '../config/env';
 import {
+  ensureMeetingRecordForBot,
   fetchBotSessionStatusRecord,
   fetchTranscriptLinesRecord,
   upsertBotSessionRecord,
@@ -112,11 +113,18 @@ meetingBaasRouter.post('/api/bot/start', async (req, res) => {
             userId,
           });
 
+          const ensured = await ensureMeetingRecordForBot({
+            botId: existingBot.bot_id,
+            userId,
+            meetingUrl,
+          });
+
           return res.json({
             botId: existingBot.bot_id,
             status: existingBot.status ?? 'queued',
             meetingUrl,
             reused: true,
+            persistenceReady: !!ensured.meetingId,
           });
         }
       }
@@ -157,10 +165,17 @@ meetingBaasRouter.post('/api/bot/start', async (req, res) => {
       userId,
     });
 
+    const ensured = await ensureMeetingRecordForBot({
+      botId,
+      userId,
+      meetingUrl,
+    });
+
     return res.json({
       botId,
       status: 'queued',
       meetingUrl,
+      persistenceReady: !!ensured.meetingId,
     });
   } catch (error) {
     return res.status(500).json({
