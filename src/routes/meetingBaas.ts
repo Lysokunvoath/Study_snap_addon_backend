@@ -463,11 +463,13 @@ meetingBaasRouter.post('/api/bot/webhook', async (req, res) => {
     session.status = eventType;
   }
 
-  if (text && /chat_message|transcript|caption/i.test(eventType || '')) {
+  if (text && (speaker || isTranscriptLikeEvent(eventType))) {
     appendLine(session, text, speaker || null, timestamp);
   }
 
-  if (eventType === 'bot.completed') {
+  const normalizedEventType = eventType.toLowerCase();
+  const normalizedStatus = statusCode.toLowerCase();
+  if (normalizedEventType === 'bot.completed' || TERMINAL_STATUSES.has(normalizedStatus)) {
     if (transcriptionUrl) {
       hydrateSessionFromTranscriptionUrl(session, transcriptionUrl).catch(() => {
         // Ignore artifact fetch errors in webhook response path.
@@ -489,6 +491,15 @@ meetingBaasRouter.post('/api/bot/webhook', async (req, res) => {
 
   return res.json({ ok: true });
 });
+
+function isTranscriptLikeEvent(eventType: string): boolean {
+  const normalized = String(eventType ?? '').trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+
+  return /chat|transcript|caption|utterance|speech|message|segment|live/.test(normalized);
+}
 
 async function meetingBaasFetch(path: string, init: RequestInit): Promise<Response> {
   const base = env.meetingBaasBaseUrl.replace(/\/+$/, '');
