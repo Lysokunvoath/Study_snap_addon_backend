@@ -11,6 +11,12 @@ type StudyGenerateBody = {
   userId?: string;
 };
 
+type StudyMediaBody = {
+  mediaBase64?: string;
+  mimeType?: string;
+  title?: string;
+};
+
 type StudyOutput = {
   title: string;
   summary: {
@@ -28,6 +34,15 @@ type StudyOutput = {
     difficulty: 'easy' | 'medium' | 'hard';
     tags: string[];
   }>;
+};
+
+type MediaStudyOutput = {
+  transcript: string;
+  summary: {
+    tldr: string[];
+    keyPoints: string[];
+    actionItems: string[];
+  };
 };
 
 const FLASHCARD_MIN = 5;
@@ -79,6 +94,46 @@ studyRouter.post('/api/study/generate', async (req, res) => {
     const message = error instanceof Error ? error.message : String(error);
     return res.status(500).json({
       error: `Study generation failed: ${message}`,
+    });
+  }
+});
+
+studyRouter.post('/api/study/media', async (req, res) => {
+  const body = (req.body ?? {}) as StudyMediaBody;
+  const mediaBase64 = (body.mediaBase64 ?? '').trim();
+  const mimeType = (body.mimeType ?? '').trim().toLowerCase();
+
+  if (!mediaBase64 || !mimeType) {
+    return res.status(400).json({
+      error: 'mediaBase64 and mimeType are required.',
+    });
+  }
+
+  if (!env.googleProjectId) {
+    return res.status(400).json({
+      error: 'GOOGLE_CLOUD_PROJECT_ID is required for Vertex AI.',
+    });
+  }
+
+  if (!/^(audio|video)\//.test(mimeType)) {
+    return res.status(400).json({
+      error: 'Only audio/* and video/* uploads are supported.',
+    });
+  }
+
+  try {
+    const title = (body.title ?? 'Uploaded Media').trim() || 'Uploaded Media';
+    const output = await transcribeAndSummarizeMedia({
+      mediaBase64,
+      mimeType,
+      title,
+    });
+
+    return res.json(output);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({
+      error: `Media transcription failed: ${message}`,
     });
   }
 });
@@ -136,6 +191,86 @@ async function generateStudyArtifacts(input: {
   }
 
   return parseStudyOutput(raw);
+}
+
+async function transcribeAndSummarizeMedia(input: {
+  mediaBase64: string;
+  mimeType: string;
+  title: string;
+}): Promise<MediaStudyOutput> {
+  const accessToken = await getVertexAccessToken();
+  const endpoint = `https://${env.vertexAiLocation}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(
+    env.googleProjectId
+  )}/locations/${encodeURIComponent(env.vertexAiLocation)}/publishers/google/models/${encodeURIComponent(
+    env.vertexAiModel
+  )}:generateContent`;
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: [
+                'You are an expert meeting assistant.',
+                'Transcribe the spoken content from this media and summarize it.',
+                'Return ONLY valid JSON with this shape:',
+                '{',
+                '  "transcript": string,',
+                '  "summary": {',
+                '    "tldr": string[],',
+                '    "keyPoints": string[],',
+                '    "actionItems": string[]',
+                '  }',
+                '}',
+                'Rules:',
+                '- transcript must include the full spoken content as plain text.',
+                '- Keep summary factual and grounded in the media only.',
+                '- Use concise bullet-style items for arrays.',
+                `- Title context: ${input.title}`,
+              ].join('\n'),
+            },
+            {
+              inlineData: {
+                mimeType: input.mimeType,
+                data: input.mediaBase64,
+              },
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Vertex AI request failed (${response.status}): ${text}`);
+  }
+
+  const payload = (await response.json()) as {
+    candidates?: Array<{
+      content?: {
+        parts?: Array<{ text?: string }>;
+      };
+    }>;
+  };
+
+  const raw = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('') ?? '';
+  if (!raw.trim()) {
+    throw new Error('Vertex AI returned empty content.');
+  }
+
+  return parseMediaOutput(raw);
 }
 
 async function getVertexAccessToken(): Promise<string> {
@@ -230,6 +365,31 @@ function parseStudyOutput(raw: string): StudyOutput {
           tags: Array.isArray(card.tags) ? card.tags.map((tag) => String(tag)).filter(Boolean) : [],
         }))
       : [],
+  };
+}
+
+function parseMediaOutput(raw: string): MediaStudyOutput {
+  const normalized = raw.trim().replace(/^```json\s*/i, '').replace(/^```/, '').replace(/```$/, '').trim();
+  const parsed = JSON.parse(normalized) as Partial<MediaStudyOutput>;
+  const transcript = String(parsed.transcript ?? '').trim();
+
+  if (!transcript) {
+    throw new Error('Media transcription response did not include transcript text.');
+  }
+
+  return {
+    transcript,
+    summary: {
+      tldr: Array.isArray(parsed.summary?.tldr)
+        ? parsed.summary.tldr.map((item) => String(item)).filter(Boolean)
+        : [],
+      keyPoints: Array.isArray(parsed.summary?.keyPoints)
+        ? parsed.summary.keyPoints.map((item) => String(item)).filter(Boolean)
+        : [],
+      actionItems: Array.isArray(parsed.summary?.actionItems)
+        ? parsed.summary.actionItems.map((item) => String(item)).filter(Boolean)
+        : [],
+    },
   };
 }
 
