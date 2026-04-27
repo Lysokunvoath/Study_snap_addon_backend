@@ -558,8 +558,24 @@ async function hydrateSessionFromTranscriptionUrl(
     return;
   }
 
-  const data = (await response.json()) as unknown;
-  const utterances = extractUtterances(data);
+  const rawBody = await response.text();
+  if (!rawBody.trim()) {
+    return;
+  }
+
+  let parsed: unknown = rawBody;
+  const contentType = String(response.headers.get('content-type') ?? '').toLowerCase();
+  const shouldTryJson = contentType.includes('json') || /^[\s\n\r]*[\[{]/.test(rawBody);
+
+  if (shouldTryJson) {
+    try {
+      parsed = JSON.parse(rawBody) as unknown;
+    } catch {
+      parsed = rawBody;
+    }
+  }
+
+  const utterances = extractUtterances(parsed);
   for (const utterance of utterances) {
     const text = (utterance.text ?? '').trim();
     if (!text) {
@@ -575,7 +591,7 @@ async function hydrateSessionFromTranscriptionUrl(
   }
 
   if (utterances.length === 0) {
-    const fallbackText = extractTranscriptText(data);
+    const fallbackText = extractTranscriptText(parsed);
     if (fallbackText) {
       for (const line of splitTranscriptIntoLines(fallbackText)) {
         appendLine(session, line, null, new Date().toISOString());
@@ -668,6 +684,10 @@ function normalizeUtteranceArray(candidate: unknown): ExtractedUtterance[] {
 }
 
 function extractTranscriptText(payload: unknown): string {
+  if (typeof payload === 'string') {
+    return payload.trim();
+  }
+
   if (!payload || typeof payload !== 'object') {
     return '';
   }
@@ -708,7 +728,14 @@ function extractTranscriptText(payload: unknown): string {
 }
 
 function splitTranscriptIntoLines(text: string): string[] {
-  const normalized = text.replace(/\r\n/g, '\n').trim();
+  const normalized = text
+    .replace(/\r\n/g, '\n')
+    .replace(/^WEBVTT\s*/i, '')
+    .replace(/^\d+\s*$/gm, '')
+    .replace(/^\d{2}:\d{2}:\d{2}[\.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[\.,]\d{3}.*$/gm, '')
+    .replace(/^\d{2}:\d{2}[\.,]\d{3}\s*-->\s*\d{2}:\d{2}[\.,]\d{3}.*$/gm, '')
+    .trim();
+
   if (!normalized) {
     return [];
   }
