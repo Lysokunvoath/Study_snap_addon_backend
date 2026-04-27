@@ -58,17 +58,40 @@ export async function upsertBotSessionRecord(input: {
   status: string;
   userId?: string;
 }): Promise<void> {
-  const meeting = await ensureMeetingForBot(input.botId, {
-    userId: input.userId,
-    meetingUrl: input.meetingUrl,
-  });
+  const client = getSupabaseClient();
+  if (!client) {
+    return;
+  }
+
+  const meeting = await findMeetingByBotId(client, input.botId);
 
   if (!meeting) {
     return;
   }
 
+  const requestedUserId = input.userId?.trim();
+  if (requestedUserId && !meeting.user_id) {
+    const { error: ownershipError } = await client
+      .from('meetings')
+      .update({
+        user_id: requestedUserId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', meeting.id);
+
+    if (ownershipError) {
+      logger.warn('Supabase meeting ownership assignment failed', {
+        botId: input.botId,
+        toUserId: requestedUserId,
+        error: ownershipError.message,
+      });
+    } else {
+      meeting.user_id = requestedUserId;
+    }
+  }
+
   const title = deriveMeetingTitle(input.meetingUrl) || meeting.title || 'Meeting Transcript';
-  const { error } = await getSupabaseClient()!
+  const { error } = await client
     .from('meetings')
     .update({ title, updated_at: new Date().toISOString() })
     .eq('id', meeting.id);
